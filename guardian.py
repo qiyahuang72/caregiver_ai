@@ -11,7 +11,7 @@ model.to('cuda')
 privacy_mode = True 
 fall_start_time = None
 
-video_path = "fall_test.mp4" 
+video_path = "datasets/fall_data/Home_01/Home_01/Videos/video (5).avi"
 cap = cv2.VideoCapture(video_path)
 
 print(f"Guardian AI Active on GB10. Privacy Mode: {'ON' if privacy_mode else 'OFF'}")
