@@ -1,49 +1,57 @@
 import cv2
-import asyncio
+import numpy as np
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from ultralytics import YOLO
 
 app = FastAPI()
+model = YOLO('yolov8m-pose.pt').to('cuda')
 
-# Load your YOLO model on the GB10
-model = YOLO('yolov8m-pose.pt')
-model.to('cuda')
-
-# Global variable to store the latest fall status
+# Global state
+privacy_mode = False
 is_fall_detected = False
 
+@app.get("/toggle_privacy")
+async def toggle_privacy():
+    global privacy_mode
+    privacy_mode = not privacy_mode
+    return {"privacy_mode": privacy_mode}
+
 def generate_frames():
-    global is_fall_detected
-    # Use one of your video paths
-    video_path = "datasets/fall_data/Home_01/Home_01/Videos/video (1).avi"
-    cap = cv2.VideoCapture(video_path)
+    global is_fall_detected, privacy_mode
+    cap = cv2.VideoCapture("datasets/fall_data/Home_01/Home_01/Videos/video (1).avi")
 
     while True:
         success, frame = cap.read()
         if not success:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop for demo
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
-        # 1. Run AI Inference
         results = model(frame, verbose=False, device=0)
         
-        # 2. Simple Fall Logic (Placeholder for your full logic)
-        # If any person's bounding box is wider than it is tall
-        for r in results:
-            if r.boxes:
-                box = r.boxes.xywh[0]
-                w, h = box[2], box[3]
-                if w > h * 1.2: # Simple ratio check for the demo
-                    is_fall_detected = True
-                else:
-                    is_fall_detected = False
+        # Determine the base frame
+        if privacy_mode:
+            # Create a heavily blurred background
+            display_frame = cv2.GaussianBlur(frame, (51, 51), 0)
+        else:
+            display_frame = frame.copy()
 
-        # 3. Draw on the frame for the phone to see
-        frame = results[0].plot() 
-        
-        # 4. Encode as JPEG for the stream
-        _, buffer = cv2.imencode('.jpg', frame)
+        # Draw skeleton on top of the (blurred or clear) frame
+        for r in results:
+            # This uses YOLO's internal plotter but on our specific display_frame
+            annotated_frame = r.plot(img=display_frame, conf=False, boxes=False)
+            
+            # Simple Fall Detection Logic
+            if r.boxes:
+                for box in r.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0]
+                    w, h = x2 - x1, y2 - y1
+                    if w > h: # Horizontal person = likely fall
+                        is_fall_detected = True
+                    else:
+                        is_fall_detected = False
+
+        _, buffer = cv2.imencode('.jpg', annotated_frame)
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
@@ -57,5 +65,4 @@ async def get_status():
 
 if __name__ == "__main__":
     import uvicorn
-    # 0.0.0.0 makes it accessible to your Mac/iPhone on the same Wi-Fi
     uvicorn.run(app, host="0.0.0.0", port=8000)
